@@ -1,0 +1,332 @@
+name: Flutter App Size Budget
+description: Track Flutter app size on every pull request, comment the diff, and fail when a size budget is exceeded.
+author: youssef336
+branding:
+  icon: package
+  color: blue
+
+inputs:
+  platform:
+    description: What to build and measure. apk, appbundle or ios (ios builds with --no-codesign and needs a macOS runner).
+    default: apk
+  working-directory:
+    description: Directory of the Flutter app, relative to the repository root.
+    default: .
+  target-platform:
+    description: Android ABI passed to --target-platform (analyze-size needs exactly one). Ignored for ios.
+    default: android-arm64
+  flavor:
+    description: Build flavor (--flavor).
+    default: ''
+  target:
+    description: Entry point (--target), e.g. lib/main_prod.dart.
+    default: ''
+  dart-define-from-file:
+    description: Passed as --dart-define-from-file, relative to working-directory.
+    default: ''
+  build-args:
+    description: Extra space-separated arguments for flutter build (e.g. "--obfuscate --split-debug-info=build/symbols").
+    default: ''
+  max-size:
+    description: Fail when the artifact is bigger than this (e.g. 25MB). Units are binary (1 MB = 1024 KB). Overrides max-size from the budget file.
+    default: ''
+  max-increase:
+    description: Fail when the artifact grows more than this vs the baseline, in bytes (500KB) or percent (2%). Overrides max-increase from the budget file.
+    default: ''
+  budget-file:
+    description: Optional YAML file with total, per-category and per-package limits, relative to working-directory. Ignored when missing.
+    default: size-budget.yaml
+  allow-label:
+    description: A pull request with this label passes even when over budget (the comment still shows the violations). Empty disables the override.
+    default: size-increase-approved
+  build-base:
+    description: Build the base commit too (in a git worktree) instead of using the cached baseline. Doubles build time, always exact.
+    default: 'false'
+  save-baseline:
+    description: auto saves the baseline on pushes to the default branch; true always saves; false never does.
+    default: auto
+  comment:
+    description: Post / update one sticky comment on the pull request.
+    default: 'true'
+  comment-id:
+    description: Keeps comments and baselines of several jobs apart (e.g. one for apk, one for ios). Defaults to platform[-flavor].
+    default: ''
+  top-packages:
+    description: How many changed Dart packages to list in the comment.
+    default: '10'
+  fail-on-budget:
+    description: Fail the job when the budget is exceeded. false only reports.
+    default: 'true'
+  github-token:
+    description: Token for the PR comment (needs pull-requests write).
+    default: ${{ github.token }}
+  setup-flutter:
+    description: Install Flutter with subosito/flutter-action@v2. Leave false when your workflow already sets Flutter up.
+    default: 'false'
+  flutter-version:
+    description: Flutter version for setup-flutter (empty = latest of the channel).
+    default: ''
+  flutter-channel:
+    description: Flutter channel for setup-flutter.
+    default: stable
+
+outputs:
+  status:
+    description: pass, fail or approved (over budget but carrying allow-label).
+    value: ${{ steps.report.outputs.status }}
+  total-size:
+    description: Size of the built artifact in bytes.
+    value: ${{ steps.report.outputs.total-size }}
+  diff-bytes:
+    description: Change vs the baseline in bytes (empty when there is no baseline).
+    value: ${{ steps.report.outputs.diff-bytes }}
+  base-size:
+    description: Baseline artifact size in bytes (empty when there is no baseline).
+    value: ${{ steps.report.outputs.base-size }}
+  baseline:
+    description: Where the baseline came from - exact, fallback, built or missing.
+    value: ${{ steps.report.outputs.baseline }}
+  report-path:
+    description: Path of the rendered Markdown report.
+    value: ${{ steps.prepare.outputs.work }}/report.md
+  snapshot-path:
+    description: Path of this run's size snapshot JSON.
+    value: ${{ steps.prepare.outputs.work }}/head.json
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Flutter
+      if: inputs.setup-flutter == 'true'
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ inputs.flutter-version }}
+        channel: ${{ inputs.flutter-channel }}
+        cache: true
+
+    - name: Prepare
+      id: prepare
+      shell: bash
+      env:
+        FSB_PLATFORM: ${{ inputs.platform }}
+        FSB_FLAVOR: ${{ inputs.flavor }}
+        FSB_COMMENT_ID: ${{ inputs.comment-id }}
+        FSB_SAVE: ${{ inputs.save-baseline }}
+        FSB_BUILD_BASE: ${{ inputs.build-base }}
+        FSB_EVENT: ${{ github.event_name }}
+        FSB_REF: ${{ github.ref }}
+        FSB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        FSB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        FSB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        id="${FSB_COMMENT_ID}"
+        if [[ -z "${id}" ]]; then
+          id="${FSB_PLATFORM}${FSB_FLAVOR:+-${FSB_FLAVOR}}"
+        fi
+        id="$(printf '%s' "${id}" | tr -c 'A-Za-z0-9._-' '-')"
+
+        mode=measure
+        if [[ "${FSB_EVENT}" == pull_request || "${FSB_EVENT}" == pull_request_target ]]; then
+          mode=pr
+        fi
+        save=false
+        if [[ "${FSB_SAVE}" == true ]]; then
+          save=true
+        elif [[ "${FSB_SAVE}" == auto && "${FSB_EVENT}" == push && -n "${FSB_DEFAULT_BRANCH}" \
+              && "${FSB_REF}" == "refs/heads/${FSB_DEFAULT_BRANCH}" ]]; then
+          save=true
+        fi
+        if [[ "${mode}" == pr ]]; then
+          save=false
+        fi
+        restore=false
+        build_base=false
+        if [[ "${mode}" == pr && -n "${FSB_BASE_SHA}" ]]; then
+          if [[ "${FSB_BUILD_BASE}" == true ]]; then build_base=true; else restore=true; fi
+        fi
+
+        work="${RUNNER_TEMP}/flutter-size-budget/${id}"
+        rm -rf "${work}"
+        mkdir -p "${work}" "${RUNNER_TEMP}/flutter-size-budget-cache/${id}"
+        {
+          echo "id=${id}"
+          echo "mode=${mode}"
+          echo "save=${save}"
+          echo "restore=${restore}"
+          echo "build-base=${build_base}"
+          echo "work=${work}"
+          echo "cache-file=${RUNNER_TEMP}/flutter-size-budget-cache/${id}/baseline.json"
+          echo "cache-prefix=flutter-size-budget-v1-${RUNNER_OS}-${id}-"
+          echo "head-sha=${FSB_HEAD_SHA}"
+        } >> "${GITHUB_OUTPUT}"
+        echo "mode=${mode} id=${id} save-baseline=${save} restore-baseline=${restore} build-base=${build_base}"
+
+    - name: Install the size tool
+      shell: bash
+      run: dart pub get --directory "${GITHUB_ACTION_PATH}/tool" > /dev/null
+
+    - name: Build (head)
+      shell: bash
+      env:
+        FSB_PLATFORM: ${{ inputs.platform }}
+        FSB_TARGET_PLATFORM: ${{ inputs.target-platform }}
+        FSB_FLAVOR: ${{ inputs.flavor }}
+        FSB_TARGET: ${{ inputs.target }}
+        FSB_DEFINE_FILE: ${{ inputs.dart-define-from-file }}
+        FSB_BUILD_ARGS: ${{ inputs.build-args }}
+        FSB_DIR: ${{ inputs.working-directory }}
+        FSB_WORK: ${{ steps.prepare.outputs.work }}
+        FSB_SHA: ${{ steps.prepare.outputs.head-sha }}
+        FSB_REF_NAME: ${{ github.head_ref || github.ref_name }}
+      run: |
+        set -euo pipefail
+        bash "${GITHUB_ACTION_PATH}/scripts/build.sh" "${FSB_DIR}" "${FSB_WORK}/head-build.log"
+        dart run "${GITHUB_ACTION_PATH}/tool/bin/size_budget.dart" snapshot \
+          --build-log "${FSB_WORK}/head-build.log" \
+          --working-directory "${FSB_DIR}" \
+          --sha "${FSB_SHA}" --ref "${FSB_REF_NAME}" \
+          --out "${FSB_WORK}/head.json"
+
+    - name: Restore baseline
+      id: restore
+      if: steps.prepare.outputs.restore == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.prepare.outputs.cache-file }}
+        key: ${{ steps.prepare.outputs.cache-prefix }}${{ github.event.pull_request.base.sha }}
+        restore-keys: ${{ steps.prepare.outputs.cache-prefix }}
+
+    - name: Build (base)
+      if: steps.prepare.outputs.build-base == 'true'
+      shell: bash
+      env:
+        FSB_PLATFORM: ${{ inputs.platform }}
+        FSB_TARGET_PLATFORM: ${{ inputs.target-platform }}
+        FSB_FLAVOR: ${{ inputs.flavor }}
+        FSB_TARGET: ${{ inputs.target }}
+        FSB_DEFINE_FILE: ${{ inputs.dart-define-from-file }}
+        FSB_BUILD_ARGS: ${{ inputs.build-args }}
+        FSB_DIR: ${{ inputs.working-directory }}
+        FSB_WORK: ${{ steps.prepare.outputs.work }}
+        FSB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        FSB_BASE_REF: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+        tree="${RUNNER_TEMP}/flutter-size-budget-base-${FSB_BASE_SHA}"
+        git -C "${GITHUB_WORKSPACE}" fetch --no-tags --depth=1 origin "${FSB_BASE_SHA}"
+        git -C "${GITHUB_WORKSPACE}" worktree add --force --detach "${tree}" "${FSB_BASE_SHA}"
+        base_dir="${tree}/${FSB_DIR}"
+        # A generated, git-ignored define file only exists in the head checkout.
+        if [[ -n "${FSB_DEFINE_FILE}" && ! -e "${base_dir}/${FSB_DEFINE_FILE}" \
+              && -e "${GITHUB_WORKSPACE}/${FSB_DIR}/${FSB_DEFINE_FILE}" ]]; then
+          mkdir -p "$(dirname "${base_dir}/${FSB_DEFINE_FILE}")"
+          cp "${GITHUB_WORKSPACE}/${FSB_DIR}/${FSB_DEFINE_FILE}" "${base_dir}/${FSB_DEFINE_FILE}"
+        fi
+        bash "${GITHUB_ACTION_PATH}/scripts/build.sh" "${base_dir}" "${FSB_WORK}/base-build.log"
+        dart run "${GITHUB_ACTION_PATH}/tool/bin/size_budget.dart" snapshot \
+          --build-log "${FSB_WORK}/base-build.log" \
+          --working-directory "${base_dir}" \
+          --sha "${FSB_BASE_SHA}" --ref "${FSB_BASE_REF}" \
+          --out "${FSB_WORK}/base.json"
+        git -C "${GITHUB_WORKSPACE}" worktree remove --force "${tree}" || true
+
+    - name: Compare and render
+      id: report
+      shell: bash
+      env:
+        FSB_WORK: ${{ steps.prepare.outputs.work }}
+        FSB_MODE: ${{ steps.prepare.outputs.mode }}
+        FSB_SAVE: ${{ steps.prepare.outputs.save }}
+        FSB_ID: ${{ steps.prepare.outputs.id }}
+        FSB_DIR: ${{ inputs.working-directory }}
+        FSB_CACHE_FILE: ${{ steps.prepare.outputs.cache-file }}
+        FSB_CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+        FSB_CACHE_MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+        FSB_BUILD_BASE: ${{ steps.prepare.outputs.build-base }}
+        FSB_MAX_SIZE: ${{ inputs.max-size }}
+        FSB_MAX_INCREASE: ${{ inputs.max-increase }}
+        FSB_BUDGET_FILE: ${{ inputs.budget-file }}
+        FSB_ALLOW_LABEL: ${{ inputs.allow-label }}
+        FSB_TOP: ${{ inputs.top-packages }}
+        FSB_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+      run: |
+        set -euo pipefail
+        base=""
+        source=missing
+        if [[ "${FSB_BUILD_BASE}" == true && -f "${FSB_WORK}/base.json" ]]; then
+          base="${FSB_WORK}/base.json"; source=built
+        elif [[ -n "${FSB_CACHE_MATCHED}" && -f "${FSB_CACHE_FILE}" ]]; then
+          base="${FSB_CACHE_FILE}"
+          if [[ "${FSB_CACHE_HIT}" == true ]]; then source=exact; else source=fallback; fi
+        fi
+        budget_file=""
+        if [[ -n "${FSB_BUDGET_FILE}" ]]; then
+          budget_file="${FSB_DIR}/${FSB_BUDGET_FILE}"
+        fi
+        extra=()
+        if [[ "${FSB_SAVE}" == true ]]; then extra+=(--saved-baseline); fi
+        dart run "${GITHUB_ACTION_PATH}/tool/bin/size_budget.dart" report \
+          --head "${FSB_WORK}/head.json" \
+          --base "${base}" \
+          --baseline-source "${source}" \
+          --max-size "${FSB_MAX_SIZE}" \
+          --max-increase "${FSB_MAX_INCREASE}" \
+          --budget-file "${budget_file}" \
+          --labels "${FSB_LABELS:-[]}" \
+          --allow-label "${FSB_ALLOW_LABEL}" \
+          --marker-id "${FSB_ID}" \
+          --top "${FSB_TOP}" \
+          --markdown-out "${FSB_WORK}/report.md" \
+          ${extra[@]+"${extra[@]}"}
+        cat "${FSB_WORK}/report.md" >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Save baseline
+      if: steps.prepare.outputs.save == 'true'
+      shell: bash
+      env:
+        FSB_WORK: ${{ steps.prepare.outputs.work }}
+        FSB_CACHE_FILE: ${{ steps.prepare.outputs.cache-file }}
+      run: cp "${FSB_WORK}/head.json" "${FSB_CACHE_FILE}"
+
+    - name: Cache baseline
+      if: steps.prepare.outputs.save == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.prepare.outputs.cache-file }}
+        key: ${{ steps.prepare.outputs.cache-prefix }}${{ github.sha }}
+
+    - name: Upload baseline artifact
+      if: steps.prepare.outputs.save == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: flutter-size-baseline-${{ steps.prepare.outputs.id }}
+        path: ${{ steps.prepare.outputs.cache-file }}
+        overwrite: true
+
+    - name: Comment on the pull request
+      if: steps.prepare.outputs.mode == 'pr' && inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FSB_WORK: ${{ steps.prepare.outputs.work }}
+        FSB_ID: ${{ steps.prepare.outputs.id }}
+        FSB_PR: ${{ github.event.pull_request.number }}
+      run: |
+        dart run "${GITHUB_ACTION_PATH}/tool/bin/size_budget.dart" comment \
+          --repo "${GITHUB_REPOSITORY}" --pr "${FSB_PR}" \
+          --marker-id "${FSB_ID}" --body-file "${FSB_WORK}/report.md"
+
+    - name: Enforce budget
+      if: steps.report.outputs.status == 'fail'
+      shell: bash
+      env:
+        FSB_MESSAGE: ${{ steps.report.outputs.failure-message }}
+        FSB_FAIL: ${{ inputs.fail-on-budget }}
+      run: |
+        message="${FSB_MESSAGE//%/%25}"
+        if [[ "${FSB_FAIL}" == true ]]; then
+          echo "::error title=App size budget::${message}"
+          exit 1
+        fi
+        echo "::warning title=App size budget::${message}"

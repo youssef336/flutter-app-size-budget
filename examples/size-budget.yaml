@@ -1,0 +1,23 @@
+# Optional: put next to pubspec.yaml (or point `budget-file` at it).
+# Sizes use binary units (1 MB = 1024 KB). max-increase takes bytes or a percentage.
+# The action inputs max-size / max-increase override the two top-level keys.
+
+max-size: 30MB
+max-increase: 2%
+
+# Compressed size inside the artifact, per category:
+# dart, engine, native, assets, dex, resources, other
+categories:
+  assets:
+    max-size: 6MB
+    max-increase: 300KB
+  native:
+    max-increase: 1MB
+
+# Decompressed Dart AOT size per library root.
+# "*" applies to every package; a named entry wins over "*".
+packages:
+  "*":
+    max-increase: 200KB
+  my_app:
+    max-size: 4MB

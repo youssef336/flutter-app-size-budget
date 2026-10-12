@@ -1,0 +1,61 @@
+Resolving dependencies...
+Downloading packages...
+  cupertino_icons 1.0.9 (2.0.0 available)
+  material_color_utilities 0.13.0 (0.13.1 available)
+  meta 1.18.3 (1.19.0 available)
+  test_api 0.7.12 (0.7.15 available)
+  vector_math 2.4.0 (2.4.3 available)
+Got dependencies!
+5 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+Running Gradle task 'assembleRelease'...                        
+Font asset "MaterialIcons-Regular.otf" was tree-shaken, reducing it from 1645184 to 1368 bytes (99.9% reduction). Tree-shaking can be disabled by providing the --no-tree-shake-icons flag when building your app.
+Running Gradle task 'assembleRelease'...                           12.8s
+✓ Built build/app/outputs/flutter-apk/app-release.apk (15.8MB)
+▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+app-release.apk (total compressed)                                         15 MB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  assets/
+    flutter_assets                                                        276 KB
+  classes.dex                                                             232 KB
+  lib/
+    arm64-v8a                                                              15 MB
+    Dart AOT symbols accounted decompressed size                            3 MB
+      package:flutter                                                       1 MB
+      dart:core                                                           256 KB
+      dart:mixin_deduplication                                            178 KB
+      dart:ui                                                             171 KB
+      dart:typed_data                                                     160 KB
+      dart:async                                                          112 KB
+      dart:io                                                             106 KB
+      package:material_color_utilities                                     70 KB
+      dart:convert                                                         50 KB
+      dart:collection                                                      43 KB
+      dart:isolate                                                         25 KB
+      package:vector_math/
+        vector_math_64.dart                                                22 KB
+      package:http                                                         12 KB
+      dart:ffi                                                             11 KB
+      package:demo_app/
+        main.dart                                                           3 KB
+      dart:math                                                             2 KB
+      package:collection/
+        src                                                                 2 KB
+      dart:mirrors                                                          1 KB
+      dart:concurrent                                                      446 B
+      dart:developer                                                       304 B
+  kotlin/
+    collections                                                             2 KB
+    concurrent                                                              1 KB
+    kotlin.kotlin_builtins                                                  5 KB
+    ranges                                                                  1 KB
+    reflect                                                                 1 KB
+  AndroidManifest.xml                                                       2 KB
+  res/
+    o-.png                                                                  1 KB
+  resources.arsc                                                            7 KB
+▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+A summary of your APK analysis can be found at: /home/runner/.flutter-devtools/apk-code-size-analysis_02.json
+
+To analyze your app size in Dart DevTools, run the following command:
+dart devtools --appSizeBase=/home/runner/.flutter-devtools/apk-code-size-analysis_02.json

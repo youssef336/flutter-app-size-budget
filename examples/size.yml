@@ -1,0 +1,59 @@
+# Copy to .github/workflows/size.yml
+#
+# - push to main: builds the app and saves the size baseline (cache + artifact).
+# - pull request: builds the PR, compares with the baseline of its base commit,
+#   updates one sticky comment and fails when the budget is exceeded.
+name: App size
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # labeled / unlabeled re-run the check when someone adds the override label.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write # sticky comment
+  actions: read
+
+concurrency:
+  group: app-size-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: App size budget
+        id: size
+        uses: youssef336/flutter-app-size-budget@v1
+        with:
+          platform: apk # apk | appbundle | ios (ios needs runs-on: macos-latest)
+          max-size: 30MB
+          max-increase: 500KB # or a percentage like 2%
+          # flavor: prod
+          # target: lib/main_prod.dart
+          # dart-define-from-file: .env.prod
+          # build-args: --obfuscate --split-debug-info=build/symbols
+          # build-base: true # build the base commit too instead of using the cache
+
+      - name: Use the outputs
+        if: always() && steps.size.outputs.total-size != ''
+        run: |
+          echo "status=${{ steps.size.outputs.status }}"
+          echo "total=${{ steps.size.outputs.total-size }} bytes"
+          echo "diff=${{ steps.size.outputs.diff-bytes }} bytes"

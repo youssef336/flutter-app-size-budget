@@ -1,0 +1,14 @@
+name: size_budget
+description: Parses Flutter --analyze-size output, diffs it against a baseline, checks budgets and renders a PR comment.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  args: ^2.5.0
+  yaml: ^3.1.2
+
+dev_dependencies:
+  test: ^1.25.0
