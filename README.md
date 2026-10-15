@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/youssef336/flutter-app-size-budget/main/screenshots/banner.png" alt="flutter-app-size-budget banner" width="100%"></p>
+
 <h1 align="center">Flutter App Size Budget</h1>
 
 <p align="center">
